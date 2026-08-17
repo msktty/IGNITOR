@@ -64,55 +64,56 @@ let continuousPlay=true;
 
 function showSong(id, options={}) {
   const autoplay = options.autoplay === true;
-  const keepPosition = options.keepPosition === true;
+  const isAutoNext = options.isAutoNext === true;
 
   if(id===currentId && globalAudio.src) {
     if(autoplay) globalAudio.play().catch(()=>{});
     return;
   }
 
-  globalAudio.pause();
-  globalAudio.currentTime=0;
-
+  // 1. 先にDOM描画状態を更新
   songs.forEach(s=>s.classList.toggle("active",s.dataset.song===id));
   const active=document.querySelector('.song[data-song="'+id+'"]');
   if(!active) return;
 
-  globalSource.src=audioFiles[id];
-  globalAudio.load();
   globalSongSelect.value=id;
   currentId=id;
   document.title="IGNITOR — "+active.querySelector("h2").textContent;
 
-  // 手動で曲を選んだときだけ先頭へ移動。
-  // 連続再生では歌詞のスクロール位置を維持する。
-  if(!keepPosition) {
-    window.scrollTo({top:0,behavior:"smooth"});
-  }
+  // 2. 音声ソース更新と再生処理
+  globalSource.src=audioFiles[id];
+  globalAudio.load();
 
   if(autoplay) {
-    globalAudio.play().catch(()=>{});
+    globalAudio.play().catch(err => {
+      console.warn("Autoplay prevented:", err);
+    });
+  }
+
+  // 3. 画面OFF/自動遷移(isAutoNext)の場合は重いスクロール処理を行わない
+  if(!isAutoNext) {
+    window.scrollTo({top:0, behavior:"smooth"});
   }
 }
 
-// 曲が終わったら自動的に次の曲へ。
-// 07終了後は01に戻らず、シリーズ終了とする。
+// 曲が終わったら自動的に次の曲へ（最後の曲の後は最初の曲へループ）
 globalAudio.addEventListener("ended", () => {
   if(!continuousPlay) return;
 
   const currentIndex = songs.findIndex(s => s.dataset.song === currentId);
-  const next = songs[currentIndex + 1];
+  // % 演算子により、最後の曲(07)の次は 0 番目(01)に循環
+  const nextIndex = (currentIndex + 1) % songs.length;
+  const next = songs[nextIndex];
 
   if(next) {
     showSong(next.dataset.song, {
-      autoplay:true,
-      keepPosition:false
+      autoplay: true,
+      isAutoNext: true // バックグラウンド動作を阻害しないフラグ
     });
   }
 });
 
 globalSongSelect.addEventListener("change", e => {
-  // 手動選択では、その曲の先頭から再生する。
   showSong(e.target.value, {autoplay:true});
 });
 

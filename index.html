@@ -72,98 +72,160 @@ const audioFiles = {
 let currentId = "01";
 let continuousPlay = true;
 
-function scrollToSong(active) {
-  if (!active) return;
+// 曲の表示位置へ移動する。
+// document.hidden のときはスクロールしない。
+// バックグラウンド再生中に画面位置を勝手に動かさないための処理。
+function scrollToSong(activeSongElement) {
+  if (!activeSongElement || document.hidden) return;
 
-  const top = Math.max(0, active.getBoundingClientRect().top + window.scrollY - 12);
-  window.scrollTo({
-    top: top,
-    behavior: "smooth"
+  activeSongElement.scrollIntoView({
+    behavior: "smooth",
+    block: "start"
+  });
+}
+
+// Media Session API に現在曲を登録。
+// Android のロック画面・通知領域などから曲送り／曲戻しを可能にする。
+function updateMediaSession(title, artist = "IGNITOR") {
+  if (!("mediaSession" in navigator) || !("MediaMetadata" in window)) return;
+
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: title,
+    artist: artist,
+    album: "IGNITOR"
+  });
+
+  // ブラウザによって未対応 action があるため個別に安全に登録する。
+  try {
+    navigator.mediaSession.setActionHandler("nexttrack", () => {
+      playNextSong();
+    });
+  } catch (error) {
+    console.warn("Media Session nexttrack is not supported:", error);
+  }
+
+  try {
+    navigator.mediaSession.setActionHandler("previoustrack", () => {
+      playPreviousSong();
+    });
+  } catch (error) {
+    console.warn("Media Session previoustrack is not supported:", error);
+  }
+}
+
+function getCurrentIndex() {
+  return songs.findIndex(song => song.dataset.song === currentId);
+}
+
+function getNextSongId() {
+  const index = getCurrentIndex();
+  if (index === -1 || songs.length === 0) return "01";
+  return songs[(index + 1) % songs.length].dataset.song;
+}
+
+function getPreviousSongId() {
+  const index = getCurrentIndex();
+  if (index === -1 || songs.length === 0) return "01";
+  return songs[(index - 1 + songs.length) % songs.length].dataset.song;
+}
+
+function playNextSong() {
+  showSong(getNextSongId(), {
+    autoplay: true,
+    isAutoNext: true
+  });
+}
+
+function playPreviousSong() {
+  showSong(getPreviousSongId(), {
+    autoplay: true,
+    isAutoNext: false
   });
 }
 
 function showSong(id, options = {}) {
   const autoplay = options.autoplay === true;
-  const isAutoNext = options.isAutoNext === true;
-
-  // 同じ曲なら音源を再ロードしない
-  if (id === currentId && globalAudio.src) {
-    if (autoplay) {
-      globalAudio.play().catch(err => {
-        console.warn("Playback failed:", err);
-      });
-    }
-    return;
-  }
-
-  // 現在の曲を停止
-  globalAudio.pause();
-  globalAudio.currentTime = 0;
-
-  // 歌詞表示を切り替え
-  songs.forEach(song => {
-    song.classList.toggle("active", song.dataset.song === id);
-  });
 
   const active = document.querySelector('.song[data-song="' + id + '"]');
-
   if (!active) {
     console.warn("Song not found:", id);
     return;
   }
 
-  // 状態を更新
+  // 同じ曲なら音源を再ロードしない。
+  if (id === currentId && globalAudio.src) {
+    globalSongSelect.value = id;
+    updateMediaSession(active.querySelector("h2").textContent.trim());
+
+    if (autoplay) {
+      globalAudio.play().catch(error => {
+        console.warn("Playback failed:", error);
+      });
+    }
+
+    // 手動選択などで同じ曲を選んだ場合も歌詞先頭へ。
+    if (!document.hidden) {
+      scrollToSong(active);
+    }
+    return;
+  }
+
+  // 現在の曲を停止。
+  globalAudio.pause();
+  globalAudio.currentTime = 0;
+
+  // 歌詞表示を切り替え。
+  songs.forEach(song => {
+    song.classList.toggle("active", song.dataset.song === id);
+  });
+
+  // 状態を更新。
   currentId = id;
   globalSongSelect.value = id;
-  document.title = "IGNITOR — " + active.querySelector("h2").textContent;
 
-  // 音源を切り替え
+  const title = active.querySelector("h2").textContent.trim();
+  document.title = "IGNITOR — " + title;
+
+  // 音源を切り替え。
   globalSource.src = audioFiles[id];
   globalAudio.load();
 
-  // 手動選択でも自動曲送りでも、その曲の歌詞トップへ移動
+  // Media Session を更新。
+  updateMediaSession(title, "IGNITOR");
+
+  // 画面が表示中なら、新しい曲の歌詞先頭へ移動。
+  // バックグラウンド中はスクロールしない。
   scrollToSong(active);
 
-  // 自動再生
+  // 自動再生。
   if (autoplay) {
-    globalAudio.play().catch(err => {
-      console.warn("Autoplay prevented:", err);
+    globalAudio.play().catch(error => {
+      console.warn("Autoplay / background playback was blocked:", error);
     });
   }
 }
 
-// 曲終了 → 次の曲へ
-// 07終了後は01へ戻り、無限ループする
-// 自動曲送りでも、新しい曲の歌詞先頭へ移動する
+// 曲終了時の処理。
+// 07 → 01 に戻って無限ループする。
+// showSong() 内でも play() するが、ここでも明示的に play() を呼ぶことで
+// 「曲切り替え → load() → 再生」の流れを確実にする。
 globalAudio.addEventListener("ended", () => {
   if (!continuousPlay) return;
 
-  const currentIndex = songs.findIndex(
-    song => song.dataset.song === currentId
-  );
+  const nextSongId = getNextSongId();
 
-  // 現在曲が見つからない場合は01へ復帰
-  if (currentIndex === -1) {
-    showSong("01", {
-      autoplay: true,
-      isAutoNext: true
-    });
-    return;
-  }
-
-  // 最後の曲の次は01へ循環
-  const nextIndex = (currentIndex + 1) % songs.length;
-  const nextSong = songs[nextIndex];
-
-  if (!nextSong) return;
-
-  showSong(nextSong.dataset.song, {
-    autoplay: true,
+  showSong(nextSongId, {
+    autoplay: false,
     isAutoNext: true
+  });
+
+  // 明示的に次曲を再生。
+  globalAudio.play().catch(error => {
+    console.warn("バックグラウンド再生がブロックされました:", error);
   });
 });
 
-// 手動で曲を選択した場合も、その曲の歌詞トップへ移動して再生
+// 手動で曲を選択。
 globalSongSelect.addEventListener("change", event => {
   showSong(event.target.value, {
     autoplay: true,
@@ -171,7 +233,7 @@ globalSongSelect.addEventListener("change", event => {
   });
 });
 
-// 初期曲
+// 初期曲。
 showSong("01");
 </script>
 </body>

@@ -33,7 +33,6 @@ audio{width:100%;margin:4px 0 26px}.lyrics{border-top:1px solid var(--line)}
 main{padding-bottom:150px}
 @media(max-width:560px){.player-inner{grid-template-columns:1fr;gap:5px}.player-brand{display:none}.floating-player{padding-top:7px}.player-meta{order:2}#globalAudio{order:1}.floating-player{padding-bottom:calc(7px + env(safe-area-inset-bottom))}main{padding-bottom:175px}}
 
-/* 繰り返しボタン */
 .repeat-controls{display:flex;gap:6px;align-items:center;margin-top:4px;flex-wrap:wrap}
 .repeat-btn{background:none;border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;color:var(--muted);transition:all .2s;background:white}
 .repeat-btn.active{background:var(--accent);color:white;border-color:var(--accent)}
@@ -86,6 +85,7 @@ const audioFiles = {
 
 let currentId = "01";
 let repeatMode = 'all'; // 'all' または 'one'
+let isPlaying = false;
 
 // 繰り返しモードの表示更新
 function updateRepeatUI() {
@@ -114,7 +114,7 @@ function scrollToSong(activeSongElement) {
   });
 }
 
-// Media Session 更新 (必要に応じて)
+// Media Session 更新（バックグラウンド再生対応）
 function updateMediaSession(title, artist = "IGNITOR") {
   if (!("mediaSession" in navigator) || !("MediaMetadata" in window)) {
     return;
@@ -172,7 +172,7 @@ function showSong(id, options = {}) {
 
   const title = active.querySelector("h2").textContent.trim();
 
-  // 同じ曲なら音源を再ロードしない（ただし、リピートモードがoneの場合は再再生）
+  // 同じ曲なら音源を再ロードしない
   if (id === currentId && globalAudio.src) {
     globalSongSelect.value = id;
     document.title = "IGNITOR — " + title;
@@ -180,7 +180,6 @@ function showSong(id, options = {}) {
     if (!document.hidden) scrollToSong(active);
 
     if (autoplay) {
-      // 同じ曲で終了した場合の再再生（リピートワン用）
       if (globalAudio.ended) {
         globalAudio.currentTime = 0;
         globalAudio.play().catch(e => console.warn("Playback failed:", e));
@@ -224,21 +223,20 @@ function showSong(id, options = {}) {
   }
 }
 
-// 曲終了時の処理（ブラウザ依存しない安定動作）
+// 曲終了時の処理（バックグラウンドでも確実に動作）
 globalAudio.addEventListener("ended", () => {
-  if (repeatMode === 'one') {
-    // 1曲リピート: 同じ曲を頭から再生
-    const currentSong = document.querySelector('.song[data-song="' + currentId + '"]');
-    if (currentSong) {
-      // 同じ曲を再表示（ロードし直さない）
+  // バックグラウンドでも確実に次の曲へ進むための遅延処理
+  setTimeout(() => {
+    if (repeatMode === 'one') {
+      // 1曲リピート: 同じ曲を頭から再生
       globalAudio.currentTime = 0;
       globalAudio.play().catch(e => console.warn("Replay failed:", e));
+    } else {
+      // 全曲リピート: 次の曲へ
+      const nextSongId = getNextSongId();
+      showSong(nextSongId, { autoplay: true, isAutoNext: true });
     }
-  } else {
-    // 全曲リピート: 次の曲へ
-    const nextSongId = getNextSongId();
-    showSong(nextSongId, { autoplay: true, isAutoNext: true });
-  }
+  }, 100);
 });
 
 // 手動選択
@@ -246,9 +244,31 @@ globalSongSelect.addEventListener("change", event => {
   showSong(event.target.value, { autoplay: true, isAutoNext: false });
 });
 
+// ページ表示状態に関わらず再生を継続するための対策
+document.addEventListener("visibilitychange", () => {
+  // バックグラウンドでも再生が止まらないようにする
+  if (document.hidden) {
+    // バックグラウンド時は特に何もしない（再生は継続される）
+    // ただし、iOS Safariでは特別な対応が必要な場合がある
+    if (globalAudio.paused && !globalAudio.ended) {
+      globalAudio.play().catch(e => console.warn("Background resume failed:", e));
+    }
+  }
+});
+
 // 初期表示
 updateRepeatUI();
-showSong("01", { autoplay: false });
+showSong("01", { autoplay: true });
+
+// ユーザーインタラクションなしでも再生できるようにする
+// ページロード後に自動再生を試行
+document.addEventListener("DOMContentLoaded", () => {
+  setTimeout(() => {
+    if (globalAudio.paused) {
+      globalAudio.play().catch(e => console.log("Autoplay requires user interaction first"));
+    }
+  }, 500);
+});
 </script>
 </body>
 </html>
